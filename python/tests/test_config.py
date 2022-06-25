@@ -1,8 +1,3 @@
-"""
-Copyright (c) 2021, Ouster, Inc.
-All rights reserved.
-"""
-
 from copy import copy
 
 from os import path
@@ -29,7 +24,8 @@ def test_operating_mode_misc() -> None:
     """Check some misc properties of operating modes."""
     assert len(
         client.OperatingMode.__members__) == 2, "Don't forget to update tests!"
-    assert client.OperatingMode.from_string("foo") is None
+    assert client.OperatingMode.from_string(
+        "foo") is None
     assert client.OperatingMode(1) == client.OperatingMode.OPERATING_NORMAL
 
 
@@ -57,7 +53,8 @@ def test_multipurpose_io_mode_misc() -> None:
     """Check some misc properties of multipurpose mode."""
     assert len(client.MultipurposeIOMode.__members__
                ) == 6, "Don't forget to update tests!"
-    assert client.MultipurposeIOMode.from_string("foo") is None
+    assert client.MultipurposeIOMode.from_string(
+        "foo") is None
     assert client.MultipurposeIOMode(
         1) == client.MultipurposeIOMode.MULTIPURPOSE_OFF
 
@@ -77,7 +74,8 @@ def test_polarity_misc() -> None:
     """Check some misc properties of polarity."""
     assert len(
         client.Polarity.__members__) == 2, "Don't forget to update tests!"
-    assert client.Polarity.from_string("foo") is None
+    assert client.Polarity.from_string(
+        "foo") is None
     assert client.Polarity(1) == client.Polarity.POLARITY_ACTIVE_LOW
 
 
@@ -96,7 +94,8 @@ def test_nmea_baud_rate_misc() -> None:
     """Check some misc properties of nmea bad rate."""
     assert len(
         client.NMEABaudRate.__members__) == 2, "Don't forget to update tests!"
-    assert client.NMEABaudRate.from_string("foo") is None
+    assert client.NMEABaudRate.from_string(
+        "foo") is None
     assert client.NMEABaudRate(1) == client.NMEABaudRate.BAUD_9600
 
 
@@ -125,8 +124,6 @@ def test_optional_config() -> None:
     assert config.udp_dest is None
     assert config.udp_port_imu is None
     assert config.udp_port_lidar is None
-    assert config.udp_profile_lidar is None
-    assert config.columns_per_packet is None
 
 
 def test_write_config() -> None:
@@ -152,9 +149,6 @@ def test_write_config() -> None:
     config.udp_dest = "udp-dest"
     config.udp_port_imu = 84
     config.udp_port_lidar = 3827
-    config.udp_profile_lidar = client.UDPProfileLidar.PROFILE_LIDAR_LEGACY
-    config.udp_profile_imu = client.UDPProfileIMU.PROFILE_IMU_LEGACY
-    config.columns_per_packet = 8
 
     with pytest.raises(TypeError):
         config.lidar_mode = 1  # type: ignore
@@ -166,7 +160,6 @@ def test_write_config() -> None:
 def complete_config_string() -> str:
     complete_config_string = """
         {"azimuth_window": [0, 360000],
-        "columns_per_packet": 8,
         "lidar_mode": "1024x10",
         "multipurpose_io_mode": "OFF",
         "nmea_baud_rate": "BAUD_9600",
@@ -185,10 +178,7 @@ def complete_config_string() -> str:
         "timestamp_mode": "TIME_FROM_INTERNAL_OSC",
         "udp_dest": "",
         "udp_port_imu": 7503,
-        "udp_port_lidar": 7502,
-        "udp_profile_imu": "LEGACY",
-        "udp_profile_lidar": "LEGACY"}
-    """
+        "udp_port_lidar": 7502}"""
     return complete_config_string
 
 
@@ -217,8 +207,6 @@ def test_read_config(complete_config_string: str) -> None:
     assert config.udp_dest == ""
     assert config.udp_port_imu == 7503
     assert config.udp_port_lidar == 7502
-    assert config.udp_profile_lidar == client.UDPProfileLidar.PROFILE_LIDAR_LEGACY
-    assert config.columns_per_packet == 8
 
     # check output of string
     assert ''.join(str(config).split()) == ''.join(

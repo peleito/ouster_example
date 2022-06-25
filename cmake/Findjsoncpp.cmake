@@ -2,10 +2,7 @@
 
 include(FindPackageHandleStandardArgs)
 
-# Recent jsoncpp cmake config fails if called twice
-if(NOT jsoncpp_FOUND)
-  find_package(jsoncpp CONFIG)
-endif()
+find_package(jsoncpp CONFIG)
 
 # This target exists on ubuntu / debian. For some reason debian bullseye doesn't
 # ship a static lib / define the jsoncpp_lib_static target.

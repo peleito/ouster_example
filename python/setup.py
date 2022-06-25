@@ -9,6 +9,7 @@ from setuptools.command.build_ext import build_ext
 from setuptools.command.sdist import sdist
 from wheel.bdist_wheel import bdist_wheel
 
+
 # use SDK source location from environment or try to guess
 SRC_PATH = os.path.dirname(os.path.abspath(__file__))
 OUSTER_SDK_PATH = os.getenv('OUSTER_SDK_PATH')
@@ -17,7 +18,7 @@ if OUSTER_SDK_PATH is None:
 if not os.path.exists(OUSTER_SDK_PATH):
     OUSTER_SDK_PATH = os.path.join(SRC_PATH, "..")
 if not os.path.exists(os.path.join(OUSTER_SDK_PATH, "cmake")):
-    raise RuntimeError("Could not guess OUSTER_SDK_PATH")
+    raise RuntimeError(f"Could not guess OUSTER_SDK_PATH")
 
 
 class CMakeExtension(Extension):
@@ -54,7 +55,8 @@ class CMakeBuild(build_ext):
         build_args = ['--config', cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ['-G', 'Visual Studio 15 2017 Win64']
+            if sys.maxsize > 2**32:
+                cmake_args += ['-A', 'x64']
             build_args += ['--', '/m']
         else:
             cmake_args += ['-DCMAKE_BUILD_TYPE=' + cfg]
@@ -77,11 +79,6 @@ class CMakeBuild(build_ext):
         # pass OUSTER_SDK_PATH to cmake
         cmake_args += ['-DOUSTER_SDK_PATH=' + OUSTER_SDK_PATH]
 
-        # specify additional cmake args
-        extra_args = env.get('CMAKE_ARGS')
-        if extra_args:
-            cmake_args += [extra_args]
-
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         subprocess.check_call(['cmake', ext.sourcedir] + cmake_args,
@@ -93,6 +90,7 @@ class CMakeBuild(build_ext):
 
 class sdk_sdist(sdist):
     """Allow including files from parent directory via symlink."""
+
     def run(self):
         created = False
         try:
@@ -124,14 +122,13 @@ class sdk_bdist_wheel(bdist_wheel):
 setup(
     name='ouster-sdk',
     url='https://github.com/ouster-lidar/ouster_example',
-    version='0.4.1',
+    version='0.2.2',
     package_dir={'': 'src'},
     packages=find_namespace_packages(where='src'),
     namespace_packages=['ouster'],
     package_data={
-        'ouster.client': ['py.typed', '_client.pyi'],
-        'ouster.pcap': ['py.typed', '_pcap.pyi'],
-        'ouster.sdk': ['py.typed', '_viz.pyi'],
+        'ouster.client': ['py.typed'],
+        'ouster.pcap': ['py.typed'],
     },
     author='Ouster SW Developers',
     description='Ouster sensor SDK',
@@ -153,23 +150,22 @@ setup(
         'typing-extensions >=3.7',
     ],
     extras_require={
-        'test': ['pytest >=7.0, <8'],
-        'dev': ['flake8', 'mypy', 'pylsp-mypy', 'python-lsp-server', 'yapf'],
+        'test': ['pytest', 'tox'],
+        'dev': [
+            'flake8', 'future', 'mypy', 'mypy-ls', 'python-lsp-server', 'yapf'
+        ],
         'docs': [
             'Sphinx >=3.5',
-            'sphinx-autodoc-typehints ==1.17.0',
-            'sphinx-rtd-theme ==1.0.0',
-            'sphinx-copybutton ==0.5.0',
-            'docutils <0.18',
-            'sphinx-tabs ==3.3.1',
+            'sphinx-autodoc-typehints ==1.11.1',
+            'sphinx-rtd-theme ==0.5.2',
+            'sphinx-copybutton ==0.3.1',
+            'docutils <0.17',
+            'sphinx-tabs ==3.0.0',
             'open3d',
-            'breathe ==4.33.1'
         ],
         'examples': [
             'matplotlib',
             'opencv-python',
-            'laspy',
             'PyQt5; platform_system=="Windows"',
         ],
-    },
-    entry_points={'console_scripts': ['simple-viz=ouster.sdk.simple_viz:main']})
+    })

@@ -1,8 +1,3 @@
-/**
- * Copyright (c) 2018, Ouster, Inc.
- * All rights reserved.
- */
-
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -15,7 +10,7 @@
 
 using namespace ouster;
 
-const size_t N_SCANS = 5;
+const int N_SCANS = 5;
 const size_t UDP_BUF_SIZE = 65536;
 
 void FATAL(const char* msg) {
@@ -24,13 +19,11 @@ void FATAL(const char* msg) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2 && argc != 3) {
+    if (argc != 3) {
         std::cerr << "Version: " << ouster::CLIENT_VERSION_FULL << " ("
                   << ouster::BUILD_SYSTEM << ")"
                   << "\n\nUsage: ouster_client_example <sensor_hostname> "
-                     "[<data_destination_ip>]"
-                     "\n\n<data_destination_ip> is optional: leave blank for "
-                     "automatic destination detection"
+                     "<data_destination_ip>"
                   << std::endl;
 
         return EXIT_FAILURE;
@@ -48,7 +41,7 @@ int main(int argc, char* argv[]) {
      * hostname/ip.
      */
     const std::string sensor_hostname = argv[1];
-    const std::string data_destination = (argc == 3) ? argv[2] : "";
+    const std::string data_destination = argv[2];
 
     std::cerr << "Connecting to \"" << sensor_hostname << "\"... ";
 
@@ -85,8 +78,7 @@ int main(int argc, char* argv[]) {
               << column_window.second << "]" << std::endl;
 
     // A LidarScan holds lidar data for an entire rotation of the device
-    std::vector<LidarScan> scans{
-        N_SCANS, LidarScan{w, h, info.format.udp_profile_lidar}};
+    std::vector<LidarScan> scans{N_SCANS, LidarScan{w, h}};
 
     // A ScanBatcher can be used to batch packets into scans
     sensor::packet_format pf = sensor::get_format(info);
@@ -103,7 +95,7 @@ int main(int argc, char* argv[]) {
     // buffer to store raw packet data
     std::unique_ptr<uint8_t[]> packet_buf(new uint8_t[UDP_BUF_SIZE]);
 
-    for (size_t i = 0; i < N_SCANS;) {
+    for (int i = 0; i < N_SCANS;) {
         // wait until sensor data is available
         sensor::client_state st = sensor::poll_client(*handle);
 
@@ -122,7 +114,7 @@ int main(int argc, char* argv[]) {
                 auto n_invalid = std::count_if(
                     scans[i].headers.begin(), scans[i].headers.end(),
                     [](const LidarScan::BlockHeader& h) {
-                        return !(h.status & 0x01);
+                        return h.status != 0xffffffff;
                     });
                 // retry until we receive a full set of valid measurements
                 // (accounting for azimuth_window settings if any)
@@ -155,7 +147,7 @@ int main(int argc, char* argv[]) {
         clouds.push_back(ouster::cartesian(scan, lut));
 
         // channel fields can be queried as well
-        auto n_returns = (scan.field(sensor::RANGE) != 0).count();
+        auto n_returns = (scan.field(LidarScan::Field::RANGE) != 0).count();
 
         std::cerr << "  Frame no. " << scan.frame_id << " with " << n_returns
                   << " returns" << std::endl;

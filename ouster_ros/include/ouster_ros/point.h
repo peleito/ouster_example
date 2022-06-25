@@ -1,7 +1,4 @@
 /**
- * Copyright (c) 2018, Ouster, Inc.
- * All rights reserved.
- *
  * @file
  * @brief PCL point datatype for use with ouster sensors
  */
@@ -10,7 +7,7 @@
 #define PCL_NO_PRECOMPILE
 #include <pcl/point_types.h>
 
-#include <Eigen/Core>
+#include <Eigen/Dense>
 #include <chrono>
 #include <functional>
 

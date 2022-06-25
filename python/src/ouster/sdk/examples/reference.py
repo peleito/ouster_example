@@ -1,9 +1,4 @@
-"""
-Copyright (c) 2021, Ouster, Inc.
-All rights reserved.
-
-Reference implementations of common operations.
-"""
+"""Reference implementations of common operations."""
 
 from itertools import product
 from math import cos, pi, sin
@@ -42,10 +37,8 @@ def xyz_proj(metadata: client.SensorInfo,
         r = scan.field(client.ChanField.RANGE)[u, v]
         n = metadata.lidar_origin_to_beam_origin_mm
 
-        # scans are always a full frame, so the measurement id is also the index
-        assert scan.measurement_id[v] == v
-
-        theta_encoder = 2.0 * pi * (1.0 - v / scan.w)
+        encoder_count = scan.header(client.ColHeader.ENCODER_COUNT)[v]
+        theta_encoder = 2.0 * pi * (1.0 - encoder_count / 90112.0)
         theta_azimuth = -2.0 * pi * (metadata.beam_azimuth_angles[u] / 360.0)
         phi = 2.0 * pi * (metadata.beam_altitude_angles[u] / 360.0)
 
@@ -69,7 +62,7 @@ def xyz_proj(metadata: client.SensorInfo,
 
 
 def destagger(pixel_shift_by_row: List[int], field: np.ndarray) -> np.ndarray:
-    """Reference implementation for destaggering a field of data.
+    """Reference implementation for dsetaggering a field of data.
 
     In the default staggered representation, each column corresponds to a
     single timestamp. In the destaggered representation, each column

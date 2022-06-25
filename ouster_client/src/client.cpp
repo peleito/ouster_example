@@ -1,8 +1,3 @@
-/**
- * Copyright (c) 2018, Ouster, Inc.
- * All rights reserved.
- */
-
 #include "ouster/client.h"
 
 #include <json/json.h>
@@ -41,9 +36,6 @@ struct client {
         impl::socket_close(imu_fd);
     }
 };
-
-// defined in types.cpp
-Json::Value to_json(const sensor_config& config, bool compat);
 
 namespace {
 
@@ -119,11 +111,6 @@ SOCKET udp_data_socket(int port) {
                 continue;
             }
 
-            if (impl::socket_set_reuse(sock_fd)) {
-                std::cerr << "udp socket_set_reuse(): "
-                          << impl::socket_get_error() << std::endl;
-            }
-
             if (bind(sock_fd, ai->ai_addr, (socklen_t)ai->ai_addrlen)) {
                 std::cerr << "udp bind(): " << impl::socket_get_error()
                           << std::endl;
@@ -136,7 +123,7 @@ SOCKET udp_data_socket(int port) {
                 std::cerr << "udp fcntl(): " << impl::socket_get_error()
                           << std::endl;
                 impl::socket_close(sock_fd);
-                continue;
+                return SOCKET_ERROR;
             }
 
             if (setsockopt(sock_fd, SOL_SOCKET, SO_RCVBUF, (char*)&RCVBUF_SIZE,
@@ -144,7 +131,7 @@ SOCKET udp_data_socket(int port) {
                 std::cerr << "udp setsockopt(): " << impl::socket_get_error()
                           << std::endl;
                 impl::socket_close(sock_fd);
-                continue;
+                return SOCKET_ERROR;
             }
 
             freeaddrinfo(info_start);
@@ -164,20 +151,11 @@ SOCKET cfg_socket(const char* addr) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    // try to parse as numeric address first: avoids spurious errors from DNS
-    // lookup when not using a hostname (and should be faster)
-    hints.ai_flags = AI_NUMERICHOST;
     int ret = getaddrinfo(addr, "7501", &hints, &info_start);
     if (ret != 0) {
-        hints.ai_flags = 0;
-        ret = getaddrinfo(addr, "7501", &hints, &info_start);
-        if (ret != 0) {
-            std::cerr << "cfg getaddrinfo(): " << gai_strerror(ret)
-                      << std::endl;
-            return SOCKET_ERROR;
-        }
+        std::cerr << "cfg getaddrinfo(): " << gai_strerror(ret) << std::endl;
+        return SOCKET_ERROR;
     }
-
     if (info_start == NULL) {
         std::cerr << "cfg getaddrinfo(): empty result" << std::endl;
         return SOCKET_ERROR;
@@ -197,14 +175,14 @@ SOCKET cfg_socket(const char* addr) {
             continue;
         }
 
-        if (impl::socket_set_rcvtimeout(sock_fd, RCVTIMEOUT_SEC)) {
-            std::cerr << "cfg set_rcvtimeout(): " << impl::socket_get_error()
-                      << std::endl;
-            impl::socket_close(sock_fd);
-            continue;
-        }
-
         break;
+    }
+
+    if (impl::socket_set_rcvtimeout(sock_fd, RCVTIMEOUT_SEC)) {
+        std::cerr << "cfg set_rcvtimeout(): " << impl::socket_get_error()
+                  << std::endl;
+        impl::socket_close(sock_fd);
+        return SOCKET_ERROR;
     }
 
     freeaddrinfo(info_start);
@@ -249,6 +227,13 @@ bool do_tcp_cmd(SOCKET sock_fd, const std::vector<std::string>& cmd_tokens,
     return true;
 }
 
+void update_json_obj(Json::Value& dst, const Json::Value& src) {
+    const std::vector<std::string>& members = src.getMemberNames();
+    for (const auto& key : members) {
+        dst[key] = src[key];
+    }
+}
+
 bool collect_metadata(client& cli, SOCKET sock_fd, chrono::seconds timeout) {
     Json::CharReaderBuilder builder{};
     auto reader = std::unique_ptr<Json::CharReader>{builder.newCharReader()};
@@ -260,7 +245,6 @@ bool collect_metadata(client& cli, SOCKET sock_fd, chrono::seconds timeout) {
 
     auto timeout_time = chrono::steady_clock::now() + timeout;
 
-    std::string status;
     do {
         success &= do_tcp_cmd(sock_fd, {"get_sensor_info"}, res);
         success &=
@@ -268,117 +252,189 @@ bool collect_metadata(client& cli, SOCKET sock_fd, chrono::seconds timeout) {
 
         if (chrono::steady_clock::now() >= timeout_time) return false;
         std::this_thread::sleep_for(chrono::seconds(1));
-        status = root["status"].asString();
-    } while (success && status == "INITIALIZING");
-    cli.meta["sensor_info"] = root;
+    } while (success && root["status"].asString() == "INITIALIZING");
 
-    // not all metadata available when sensor isn't RUNNING
-    if (status != "RUNNING") {
-        throw std::runtime_error(
-            "Cannot initialize with sensor status: " + status +
-            ". Please ensure operating mode is set to NORMAL");
-    }
+    update_json_obj(cli.meta, root);
 
     success &= do_tcp_cmd(sock_fd, {"get_beam_intrinsics"}, res);
     success &=
         reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL);
-    cli.meta["beam_intrinsics"] = root;
+    update_json_obj(cli.meta, root);
 
     success &= do_tcp_cmd(sock_fd, {"get_imu_intrinsics"}, res);
     success &=
         reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL);
-    cli.meta["imu_intrinsics"] = root;
+    update_json_obj(cli.meta, root);
 
     success &= do_tcp_cmd(sock_fd, {"get_lidar_intrinsics"}, res);
     success &=
         reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL);
-    cli.meta["lidar_intrinsics"] = root;
+    update_json_obj(cli.meta, root);
 
-    success &= do_tcp_cmd(sock_fd, {"get_lidar_data_format"}, res);
-    if (success) {
-        if (reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL)) {
-            cli.meta["lidar_data_format"] = root;
-        } else {
-            cli.meta["lidar_data_format"] = res;
-        }
-    }
+    // try to query data format
+    bool got_format = true;
+    got_format &= do_tcp_cmd(sock_fd, {"get_lidar_data_format"}, res);
+    got_format &=
+        reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL);
+    if (got_format) cli.meta["data_format"] = root;
 
-    success &= do_tcp_cmd(sock_fd, {"get_calibration_status"}, res);
-    if (success) {
-        if (reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL)) {
-            cli.meta["calibration_status"] = root;
-        } else {
-            cli.meta["calibration_status"] = res;
-        }
-    }
-
+    // get lidar mode
     success &= do_tcp_cmd(sock_fd, {"get_config_param", "active"}, res);
     success &=
         reader->parse(res.c_str(), res.c_str() + res.size(), &root, NULL);
-    cli.meta["config_params"] = root;
 
     // merge extra info into metadata
-    cli.meta["client_version"] = client_version();
+    cli.meta["hostname"] = cli.hostname;
+    cli.meta["lidar_mode"] = root["lidar_mode"];
+    cli.meta["client_version"] = ouster::CLIENT_VERSION;
+
+    cli.meta["json_calibration_version"] = FW_2_0;
 
     return success;
 }
 
+// conversion for operating_mode (introduced in fw 2.0) to auto_start
+// (deprecated in 1.13)
+const std::array<std::pair<OperatingMode, std::string>, 2> auto_start_strings =
+    {{{OPERATING_NORMAL, "1"}, {OPERATING_STANDBY, "0"}}};
+
+static std::string auto_start_string(OperatingMode mode) {
+    auto end = auto_start_strings.end();
+    auto res =
+        std::find_if(auto_start_strings.begin(), end,
+                     [&](const std::pair<OperatingMode, std::string>& p) {
+                         return p.first == mode;
+                     });
+
+    return res == end ? "UNKNOWN" : res->second;
+}
+
 bool set_config_helper(SOCKET sock_fd, const sensor_config& config,
                        uint8_t config_flags) {
-    std::string res{};
+    std::string res;
+    bool success = true;
 
-    // reset staged config to avoid spurious errors
-    std::string active_params;
-    if (!do_tcp_cmd(sock_fd, {"get_config_param", "active"}, active_params))
-        throw std::runtime_error("Failed to run 'get_config_param'");
-    if (!do_tcp_cmd(sock_fd, {"set_config_param", ".", active_params}, res))
-        throw std::runtime_error("Failed to run 'set_config_param'");
-    if (res != "set_config_param")
-        throw std::runtime_error("Error on 'set_config_param': " + res);
+    auto set_param = [&sock_fd, &res](std::string param_name,
+                                      std::string param_value) {
+        bool success = true;
+        success &= do_tcp_cmd(
+            sock_fd, {"set_config_param", param_name, param_value}, res);
+        success &= res == "set_config_param";
+        return success;
+    };
 
-    // set automatic udp dest, if flag specified
-    if (config_flags & CONFIG_UDP_DEST_AUTO) {
-        if (config.udp_dest)
-            throw std::invalid_argument(
-                "UDP_DEST_AUTO flag set but provided config has udp_dest");
+    // set params
+    if (config.udp_dest && !set_param("udp_ip", config.udp_dest.value()))
+        return false;
 
-        if (!do_tcp_cmd(sock_fd, {"set_udp_dest_auto"}, res))
-            throw std::runtime_error("Failed to run 'set_udp_dest_auto'");
+    if (config.udp_port_lidar &&
+        !set_param("udp_port_lidar",
+                   std::to_string(config.udp_port_lidar.value())))
+        return false;
 
-        if (res != "set_udp_dest_auto")
-            throw std::runtime_error("Error on 'set_udp_dest_auto': " + res);
+    if (config.udp_port_imu &&
+        !set_param("udp_port_imu", std::to_string(config.udp_port_imu.value())))
+        return false;
+
+    if (config.ts_mode &&
+        !set_param("timestamp_mode", to_string(config.ts_mode.value())))
+        return false;
+
+    if (config.ld_mode &&
+        !set_param("lidar_mode", to_string(config.ld_mode.value())))
+        return false;
+
+    // "operating_mode" introduced in fw 2.0. use deprecated 'auto_start_flag'
+    // to support 1.13
+    if (config.operating_mode &&
+        !set_param("auto_start_flag",
+                   auto_start_string(config.operating_mode.value())))
+        return false;
+
+    if (config.multipurpose_io_mode &&
+        !set_param("multipurpose_io_mode",
+                   to_string(config.multipurpose_io_mode.value())))
+        return false;
+
+    if (config.azimuth_window &&
+        !set_param("azimuth_window", to_string(config.azimuth_window.value())))
+        return false;
+
+    if (config.signal_multiplier &&
+        !set_param("signal_multiplier",
+                   std::to_string(config.signal_multiplier.value())))
+        return false;
+
+    if (config.sync_pulse_out_angle &&
+        !set_param("sync_pulse_out_angle",
+                   std::to_string(config.sync_pulse_out_angle.value())))
+        return false;
+
+    if (config.sync_pulse_out_pulse_width &&
+        !set_param("sync_pulse_out_pulse_width",
+                   std::to_string(config.sync_pulse_out_pulse_width.value())))
+        return false;
+
+    if (config.nmea_in_polarity &&
+        !set_param("nmea_in_polarity",
+                   to_string(config.nmea_in_polarity.value())))
+        return false;
+
+    if (config.nmea_baud_rate &&
+        !set_param("nmea_baud_rate", to_string(config.nmea_baud_rate.value())))
+        return false;
+
+    if (config.nmea_ignore_valid_char) {
+        const std::string nmea_ignore_valid_char_string =
+            config.nmea_ignore_valid_char.value() ? "1" : "0";
+        if (!set_param("nmea_ignore_valid_char", nmea_ignore_valid_char_string))
+            return false;
     }
 
-    // set all desired config parameters
-    Json::Value config_json = to_json(config, true);
-    for (const auto& key : config_json.getMemberNames()) {
-        auto value = Json::FastWriter().write(config_json[key]);
-        value.erase(std::remove(value.begin(), value.end(), '\n'), value.end());
+    if (config.nmea_leap_seconds &&
+        !set_param("nmea_leap_seconds",
+                   std::to_string(config.nmea_leap_seconds.value())))
+        return false;
 
-        if (!do_tcp_cmd(sock_fd, {"set_config_param", key, value}, res))
-            throw std::runtime_error("Failed to run 'set_config_param'");
+    if (config.sync_pulse_in_polarity &&
+        !set_param("sync_pulse_in_polarity",
+                   to_string(config.sync_pulse_in_polarity.value())))
+        return false;
 
-        if (res != "set_config_param")
-            throw std::invalid_argument("Error on 'set_config_param': " + res);
+    if (config.sync_pulse_out_polarity &&
+        !set_param("sync_pulse_out_polarity",
+                   to_string(config.sync_pulse_in_polarity.value())))
+        return false;
+
+    if (config.sync_pulse_out_frequency &&
+        !set_param("sync_pulse_out_frequency",
+                   std::to_string(config.sync_pulse_out_frequency.value())))
+        return false;
+
+    if (config.phase_lock_enable) {
+        const std::string phase_lock_enable_string =
+            config.phase_lock_enable.value() ? "true" : "false";
+        if (!set_param("phase_lock_enable", phase_lock_enable_string))
+            return false;
     }
 
-    // reinitialize to make all staged parameters effective
-    if (!do_tcp_cmd(sock_fd, {"reinitialize"}, res))
-        throw std::runtime_error("Failed to run 'reinitialize'");
+    if (config.phase_lock_offset &&
+        !set_param("phase_lock_offset",
+                   std::to_string(config.phase_lock_offset.value())))
+        return false;
 
-    // reinit will report an error only when staged configs are incompatible
-    if (res != "reinitialize") throw std::invalid_argument(res);
+    // reinitialize
+    success &= do_tcp_cmd(sock_fd, {"reinitialize"}, res);
+    success &= res == "reinitialize";
 
-    // save if indicated, use deprecated write_config_txt to support 1.13
+    // save if indicated
     if (config_flags & CONFIG_PERSIST) {
-        if (!do_tcp_cmd(sock_fd, {"write_config_txt"}, res))
-            throw std::runtime_error("Failed to run 'write_config_txt'");
-
-        if (res != "write_config_txt")
-            throw std::runtime_error("Error on 'write_config_txt': " + res);
+        // use deprecated write_config_txt to support 1.13
+        success &= do_tcp_cmd(sock_fd, {"write_config_txt"}, res);
+        success &= res == "write_config_txt";
     }
 
-    return true;
+    return success;
 }
 }  // namespace
 
@@ -413,18 +469,29 @@ bool set_config(const std::string& hostname, const sensor_config& config,
     SOCKET sock_fd = cfg_socket(hostname.c_str());
     if (sock_fd < 0) return false;
 
-    try {
-        set_config_helper(sock_fd, config, config_flags);
-    } catch (...) {
-        impl::socket_close(sock_fd);
-        throw;
+    std::string res;
+    bool success = true;
+
+    if (config_flags & CONFIG_UDP_DEST_AUTO) {
+        if (config.udp_dest) {
+            impl::socket_close(sock_fd);
+            throw std::invalid_argument(
+                "UDP_DEST_AUTO flag set but provided config has udp_dest");
+        }
+        success &= do_tcp_cmd(sock_fd, {"set_udp_dest_auto"}, res);
+        success &= res == "set_udp_dest_auto";
+    }
+
+    if (success) {
+        success = set_config_helper(sock_fd, config, config_flags);
     }
 
     impl::socket_close(sock_fd);
-    return true;
+
+    return success;
 }
 
-std::string get_metadata(client& cli, int timeout_sec, bool legacy_format) {
+std::string get_metadata(client& cli, int timeout_sec) {
     if (!cli.meta) {
         SOCKET sock_fd = cfg_socket(cli.hostname.c_str());
         if (sock_fd < 0) return "";
@@ -441,10 +508,7 @@ std::string get_metadata(client& cli, int timeout_sec, bool legacy_format) {
     builder["enableYAMLCompatibility"] = true;
     builder["precision"] = 6;
     builder["indentation"] = "    ";
-
-    auto metadata_string = Json::writeString(builder, cli.meta);
-
-    return legacy_format ? convert_to_legacy(metadata_string) : metadata_string;
+    return Json::writeString(builder, cli.meta);
 }
 
 std::shared_ptr<client> init_client(const std::string& hostname, int lidar_port,
@@ -536,7 +600,7 @@ std::shared_ptr<client> init_client(const std::string& hostname,
     success &= collect_metadata(*cli, sock_fd, chrono::seconds{timeout_sec});
 
     // check for sensor error states
-    auto status = cli->meta["sensor_info"]["status"].asString();
+    auto status = cli->meta["status"].asString();
     success &= (status != "ERROR" && status != "UNCONFIGURED");
 
     impl::socket_close(sock_fd);
@@ -593,10 +657,6 @@ bool read_lidar_packet(const client& cli, uint8_t* buf,
 bool read_imu_packet(const client& cli, uint8_t* buf, const packet_format& pf) {
     return recv_fixed(cli.imu_fd, buf, pf.imu_packet_size);
 }
-
-int get_lidar_port(client& cli) { return get_sock_port(cli.lidar_fd); }
-
-int get_imu_port(client& cli) { return get_sock_port(cli.imu_fd); }
 
 }  // namespace sensor
 }  // namespace ouster

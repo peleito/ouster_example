@@ -1,8 +1,3 @@
-/**
- * Copyright (c) 2018, Ouster, Inc.
- * All rights reserved.
- */
-
 #include "ouster_ros/ros.h"
 
 #include <pcl_conversions/pcl_conversions.h>
@@ -68,81 +63,26 @@ sensor_msgs::Imu packet_to_imu_msg(const PacketMsg& p, const std::string& frame,
     return m;
 }
 
-struct read_and_cast {
-    template <typename T, typename U>
-    void operator()(Eigen::Ref<const ouster::img_t<T>> field,
-                    ouster::img_t<U>& dest) {
-        dest = field.template cast<U>();
-    }
-};
-
-sensor::ChanField suitable_return(sensor::ChanField input_field, bool second) {
-    switch (input_field) {
-        case sensor::ChanField::RANGE:
-        case sensor::ChanField::RANGE2:
-            return second ? sensor::ChanField::RANGE2
-                          : sensor::ChanField::RANGE;
-        case sensor::ChanField::SIGNAL:
-        case sensor::ChanField::SIGNAL2:
-            return second ? sensor::ChanField::SIGNAL2
-                          : sensor::ChanField::SIGNAL;
-        case sensor::ChanField::REFLECTIVITY:
-        case sensor::ChanField::REFLECTIVITY2:
-            return second ? sensor::ChanField::REFLECTIVITY2
-                          : sensor::ChanField::REFLECTIVITY;
-        case sensor::ChanField::NEAR_IR:
-            return sensor::ChanField::NEAR_IR;
-        default:
-            throw std::runtime_error("Unreachable");
-    }
-}
-
-template <typename T>
-inline ouster::img_t<T> get_or_fill_zero(sensor::ChanField f,
-                                         const ouster::LidarScan& ls) {
-    ouster::img_t<T> result{ls.h, ls.w};
-    if (ls.field_type(f)) {
-        ouster::impl::visit_field(ls, f, read_and_cast(), result);
-    } else {
-        result = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic,
-                               Eigen::RowMajor>::Zero(ls.h, ls.w);
-    }
-    return result;
-}
-
 void scan_to_cloud(const ouster::XYZLut& xyz_lut,
                    ouster::LidarScan::ts_t scan_ts, const ouster::LidarScan& ls,
-                   ouster_ros::Cloud& cloud, int return_index) {
-    bool second = (return_index == 1);
+                   ouster_ros::Cloud& cloud) {
     cloud.resize(ls.w * ls.h);
-
-    ouster::img_t<uint16_t> near_ir = get_or_fill_zero<uint16_t>(
-        suitable_return(sensor::ChanField::NEAR_IR, second), ls);
-
-    ouster::img_t<uint32_t> range = get_or_fill_zero<uint32_t>(
-        suitable_return(sensor::ChanField::RANGE, second), ls);
-
-    ouster::img_t<uint32_t> signal = get_or_fill_zero<uint32_t>(
-        suitable_return(sensor::ChanField::SIGNAL, second), ls);
-
-    ouster::img_t<uint16_t> reflectivity = get_or_fill_zero<uint16_t>(
-        suitable_return(sensor::ChanField::REFLECTIVITY, second), ls);
-
-    auto points = ouster::cartesian(range, xyz_lut);
+    auto points = ouster::cartesian(ls, xyz_lut);
 
     for (auto u = 0; u < ls.h; u++) {
         for (auto v = 0; v < ls.w; v++) {
             const auto xyz = points.row(u * ls.w + v);
+            const auto pix = ls.data.row(u * ls.w + v);
             const auto ts = (ls.header(v).timestamp - scan_ts).count();
             cloud(v, u) = ouster_ros::Point{
                 {{static_cast<float>(xyz(0)), static_cast<float>(xyz(1)),
                   static_cast<float>(xyz(2)), 1.0f}},
-                static_cast<float>(signal(u, v)),
+                static_cast<float>(pix(ouster::LidarScan::INTENSITY)),
                 static_cast<uint32_t>(ts),
-                static_cast<uint16_t>(reflectivity(u, v)),
+                static_cast<uint16_t>(pix(ouster::LidarScan::REFLECTIVITY)),
                 static_cast<uint8_t>(u),
-                static_cast<uint16_t>(near_ir(u, v)),
-                static_cast<uint32_t>(range(u, v))};
+                static_cast<uint16_t>(pix(ouster::LidarScan::AMBIENT)),
+                static_cast<uint32_t>(pix(ouster::LidarScan::RANGE))};
         }
     }
 }
